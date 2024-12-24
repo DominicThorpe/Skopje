@@ -3,9 +3,18 @@ use crate::errors::LexingError;
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Position {
-    line: usize,
-    col: usize,
-    length: usize,
+    pub(crate) line: usize,
+    pub(crate) col: usize,
+    pub(crate) length: usize,
+}
+
+
+impl Position {
+    pub fn zeros() -> Self {
+        Self {
+            line: 0, col: 0, length: 0
+        }
+    }
 }
 
 
@@ -47,8 +56,8 @@ pub enum TokenType {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Token {
-    token_type: TokenType,
-    position: Position,
+    pub(crate) token_type: TokenType,
+    pub(crate) position: Position,
 }
 
 
