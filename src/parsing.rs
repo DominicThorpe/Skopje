@@ -1,9 +1,10 @@
 use crate::errors::ParsingError;
-use crate::errors::ParsingError::InsufficientTokens;
 use crate::lexing::{Position, Token, TokenType};
+use crate::lexing::TokenType::LetKeyword;
+use crate::parsing::ParseNodeType::IfElseStatement;
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ParseNodeType {
     /// List of function declarations,
     Program(Vec<ParseNode>),
@@ -11,16 +12,29 @@ pub enum ParseNodeType {
     FunctionDeclaration(String, Vec<ParseNode>, Box<ParseNode>, Box<ParseNode>),
     /// Parameter name, parameter type
     FunctionParameter(String, Box<ParseNode>),
+    /// If statement condition, if true body, if false body 
+    IfElseStatement(Box<ParseNode>, Box<ParseNode>, Box<ParseNode>),
+    /// For loop iterator variable, iterator variable type, array to iterate over, and body of 
+    /// iterator
+    Loop(Box<ParseNode>, Box<ParseNode>, Box<ParseNode>, Box<ParseNode>),
+    /// Identifier to assign, variable type, expression to assign, continuation
+    Assignment(String, Box<ParseNode>, Box<ParseNode>, Box<ParseNode>),
     /// Plain identifier
     Identifier(String),
     /// An integer literal
     IntegerLiteral(u64),
+    /// A float literal
+    FloatLiteral(f64),
+    /// A string literal
+    StringLiteral(String),
+    /// Elements of the array literal
+    ArrayLiteral(Vec<ParseNode>),
     /// Unit type
     Unit
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ParseNode {
     node_type: ParseNodeType,
     position: Position
@@ -52,7 +66,7 @@ impl Parser {
 
     /// Asserts that the next token in the token stream matches the expected token type.
     ///
-    /// If the next token in the stream does not match the specified `token_type`, this function 
+    /// If the next token in the stream does not match the specified `token_type`, this function
     /// will return an error of type `ParsingError`.
     /// If the token matches the expected type, it is removed from the token stream.
     ///
@@ -62,7 +76,7 @@ impl Parser {
     ///
     /// # Returns
     ///
-    /// - `Ok(())` if the next token matches the expected type and is successfully removed from the 
+    /// - `Ok(())` if the next token matches the expected type and is successfully removed from the
     /// stream.
     /// - `Err(ParsingError)` if:
     ///   - The token stream is empty, indicating no token to validate.
@@ -71,9 +85,9 @@ impl Parser {
     /// # Errors
     ///
     /// Returns a `ParsingError::InvalidToken` error in the following cases:
-    /// - If the token stream is empty, indicating an invalid or unexpected token 
+    /// - If the token stream is empty, indicating an invalid or unexpected token
     ///   is encountered. In this case, the position of the error is set to `(0, 0)`.
-    /// - If the next token in the stream does not match the provided `token_type`, 
+    /// - If the next token in the stream does not match the provided `token_type`,
     ///   the error will include the mismatched token and its position (line and column).
     ///
     /// # Example
@@ -101,12 +115,12 @@ impl Parser {
             Some(token) => token,
             None => return Err(ParsingError::InsufficientTokens)
         };
-        
+
         // check that the token type of the next token is the same as the expected token type
         if first_token.token_type != token_type {
             return Err(ParsingError::InvalidToken(
-                first_token.clone(), 
-                first_token.position.line, 
+                first_token.clone(),
+                first_token.position.line,
                 first_token.position.col
             ));
         }
@@ -167,7 +181,7 @@ impl Parser {
     pub fn parse(&mut self) -> Result<ParseNode, ParsingError> {
         Ok(
             ParseNode::new(
-                ParseNodeType::Program(vec![self.parse_function_declaration()?]), 
+                ParseNodeType::Program(vec![self.parse_function_declaration()?]),
                Position { line: 1, col: 1, length: 0 }
             ))
     }
@@ -185,45 +199,46 @@ impl Parser {
     /// - `Err(ParsingError)` in case of parsing issues, like invalid token types or syntax errors.
     fn parse_function_declaration(&mut self) -> Result<ParseNode, ParsingError> {
         self.assert_next_token_of_type(TokenType::FnKeyword)?;
-        
+
         // get the name of the function
         let next_token = self.get_next_token_required()?;
         let declaration_pos = next_token.position;
         let identifier = match next_token.token_type.clone() {
             TokenType::Identifier(identifier) => identifier,
             _ => return Err(ParsingError::InvalidToken(
-                next_token.clone(), 
-                declaration_pos.line, 
+                next_token.clone(),
+                declaration_pos.line,
                 declaration_pos.col
             )),
         };
-        
+        self.tokenstream.remove(0);
+
         // get the parameters of the function
         self.assert_next_token_of_type(TokenType::OpenParen)?;
         let params = self.parse_function_params()?;
         self.assert_next_token_of_type(TokenType::Arrow)?;
-        
+
         // get the return type of the function
         let next_token = self.get_next_token_required()?;
         let return_type = match next_token.token_type.clone() {
-            TokenType::Identifier(identifier) => 
+            TokenType::Identifier(identifier) =>
                 ParseNode::new(ParseNodeType::Identifier(identifier), next_token.position),
             _ => return Err(ParsingError::InvalidToken(next_token.clone(), 0, 0)),
         };
         self.tokenstream.remove(0);
-        
+
         // get the return type of the function
         self.assert_next_token_of_type(TokenType::OpenCurly)?;
         let body = self.parse_expression()?;
         self.assert_next_token_of_type(TokenType::CloseCurly)?;
-        
+
         let node_type = ParseNodeType::FunctionDeclaration(
-            identifier.to_string(), 
-            params, 
-            Box::new(body), 
+            identifier.to_string(),
+            params,
+            Box::new(body),
             Box::new(return_type)
         );
-        
+
         Ok(ParseNode::new(node_type, declaration_pos))
     }
 
@@ -235,8 +250,8 @@ impl Parser {
     ///
     /// # Returns
     ///
-    /// - `Ok(Vec<ParseNode>)` if the parameters are successfully parsed, with each element in the Vector 
-    ///   representing a single parameter (identifier and type).
+    /// - `Ok(Vec<ParseNode>)` if the parameters are successfully parsed, with each element in the 
+    ///   Vector representing a single parameter (identifier and type).
     /// - `Err(ParsingError)` in case of invalid or unexpected tokens in the list of parameters.
     fn parse_function_params(&mut self) -> Result<Vec<ParseNode>, ParsingError> {
         let mut params: Vec<ParseNode> = Vec::new();
@@ -249,19 +264,19 @@ impl Parser {
                 // start of a new parameter of the form <IDENTIFIER> : <TYPE>
                 TokenType::Identifier(identifier) => {
                     self.tokenstream.remove(0);
-                    
+
                     self.assert_next_token_of_type(TokenType::Colon)?;
-                    
+
                     // get the type of the parameter
                     let param_type = match &self.tokenstream.first().unwrap().token_type {
-                        TokenType::Identifier(s) => 
+                        TokenType::Identifier(s) =>
                             ParseNode::new(ParseNodeType::Identifier(s.to_string()), Position::zeros()),
                         _ => return Err(ParsingError::InvalidToken(self.tokenstream.first().unwrap().clone(), 0, 0)),
                     };
                     self.tokenstream.remove(0);
-                    
+
                     let node_type = ParseNodeType::FunctionParameter(
-                        identifier.to_string(), 
+                        identifier.to_string(),
                         Box::new(param_type)
                     );
                     params.push(ParseNode::new(node_type, Position::zeros()));
@@ -272,30 +287,589 @@ impl Parser {
 
         Ok(params)
     }
-    
-    
+
+
     fn parse_expression(&mut self) -> Result<ParseNode, ParsingError> {
-        self.parse_value()
+        let next_token = self.get_next_token_required()?.clone();
+        match next_token.token_type {
+            TokenType::IfKeyword => self.parse_selection(next_token.position),
+            TokenType::ForKeyword => self.parse_loop(next_token.position),
+            TokenType::LetKeyword => self.parse_assignment(next_token.position),
+            _ => self.parse_value()
+        }
     }
     
     
+    fn parse_selection(&mut self, position: Position) -> Result<ParseNode, ParsingError> {
+        self.tokenstream.remove(0);
+        
+        let condition = self.parse_expression()?;
+        self.assert_next_token_of_type(TokenType::OpenCurly)?;
+        let true_branch = self.parse_expression()?;
+        self.assert_next_token_of_type(TokenType::CloseCurly)?;
+        self.assert_next_token_of_type(TokenType::ElseKeyword)?;
+        self.assert_next_token_of_type(TokenType::OpenCurly)?;
+        let false_branch = self.parse_expression()?;
+        self.assert_next_token_of_type(TokenType::CloseCurly)?;
+        
+        let node_type = IfElseStatement(
+            Box::new(condition), 
+            Box::new(true_branch), 
+            Box::new(false_branch)
+        );
+        Ok(ParseNode::new(node_type, position))
+    }
+    
+    
+    fn parse_loop(&mut self, position: Position) -> Result<ParseNode, ParsingError> {
+        self.tokenstream.remove(0); // remove the "for" token
+        
+        // get the iteration variable identifier
+        let next_token = self.get_next_token_required()?;
+        let next_token_pos = next_token.position;
+        let id_token_type = match &next_token.token_type {
+            TokenType::Identifier(id) => ParseNodeType::Identifier(id.to_string()),
+            _ => return Err(ParsingError::InvalidToken(
+                next_token.clone(), 
+                next_token_pos.col, 
+                next_token_pos.line
+            ))
+        };
+        let id_token = ParseNode::new(id_token_type, next_token_pos);
+        self.tokenstream.remove(0);
+        
+        // get the iteration variable type
+        self.assert_next_token_of_type(TokenType::Colon)?;
+        let next_token = self.get_next_token_required()?;
+        let next_token_pos = next_token.position;
+        let iter_type_token_type = match &next_token.token_type {
+            TokenType::Identifier(id) => ParseNodeType::Identifier(id.to_string()),
+            _ => return Err(ParsingError::InvalidToken(
+                next_token.clone(),
+                next_token_pos.col,
+                next_token_pos.line
+            ))
+        };
+        let type_token = ParseNode::new(iter_type_token_type, next_token_pos);
+        self.tokenstream.remove(0);
+        
+        // get the array to iterate over
+        self.assert_next_token_of_type(TokenType::InKeyword)?;
+        let iter_array = self.parse_expression()?;
+        
+        // get the expression in the body
+        self.assert_next_token_of_type(TokenType::OpenCurly)?;
+        let body = self.parse_expression()?;
+        self.assert_next_token_of_type(TokenType::CloseCurly)?;
+        
+        Ok(ParseNode::new(ParseNodeType::Loop(
+            Box::new(id_token),
+            Box::new(type_token),
+            Box::new(iter_array),
+            Box::new(body)
+        ), position.clone()))
+    }
+    
+    
+    fn parse_assignment(&mut self, position: Position) -> Result<ParseNode, ParsingError> {
+        self.assert_next_token_of_type(LetKeyword)?;
+        
+        // get identifier
+        let next_token = self.get_next_token_required()?.clone();
+        self.tokenstream.remove(0);
+        let token_pos = next_token.position;
+        let identifier = match &next_token.token_type {
+            TokenType::Identifier(id) => id,
+            _ => return Err(ParsingError::InvalidToken(
+                next_token.clone(), 
+                token_pos.line, 
+                token_pos.col
+            ))
+        };
+        
+        self.assert_next_token_of_type(TokenType::Colon)?;
+        
+        // get type
+        let next_token = self.get_next_token_required()?.clone();
+        self.tokenstream.remove(0);
+        let token_pos = next_token.position;
+        let type_node = match &next_token.token_type {
+            TokenType::Identifier(id) => ParseNode::new(
+                ParseNodeType::Identifier(id.to_string()), 
+                token_pos
+            ),
+            _ => return Err(ParsingError::InvalidToken(
+                next_token.clone(),
+                token_pos.line,
+                token_pos.col
+            ))
+        };
+        
+        self.assert_next_token_of_type(TokenType::Equals)?;
+        let expression = self.parse_expression()?;        
+        self.assert_next_token_of_type(TokenType::Semicolon)?;
+        
+        // parse continuation
+        let continuation = self.parse_expression()?;
+        
+        Ok(ParseNode::new(ParseNodeType::Assignment(
+            identifier.to_string(),
+            Box::new(type_node),
+            Box::new(expression),
+            Box::new(continuation)
+        ), position.clone()))
+    }
+
+
     fn parse_value(&mut self) -> Result<ParseNode, ParsingError> {
          let node_type = match &self.tokenstream.first().unwrap().token_type {
              TokenType::Identifier(s) => ParseNodeType::Identifier(s.clone()),
              TokenType::Integer(i) => ParseNodeType::IntegerLiteral(*i),
-             TokenType::String(s) => todo!(),
+             TokenType::OpenSquare => return self.parse_array_literal(),
+             TokenType::String(s) => ParseNodeType::StringLiteral(s.clone()),
+             TokenType::Float(f) => ParseNodeType::FloatLiteral(*f),
              _ => return Err(ParsingError::InvalidToken(self.tokenstream.first().unwrap().clone(), 0, 0)),
          };
         self.tokenstream.remove(0);
-        
+
         Ok(ParseNode::new(node_type, Position::zeros()))
     }
     
     
+    fn parse_array_literal(&mut self) -> Result<ParseNode, ParsingError> {
+        self.assert_next_token_of_type(TokenType::OpenSquare)?;
+        
+        let mut elems = vec![];
+        loop {
+            let next_token = self.get_next_token_required()?.clone();
+            match next_token.token_type {
+                TokenType::CloseSquare => { self.tokenstream.remove(0); break },
+                TokenType::Comma => { self.tokenstream.remove(0); continue },
+                _ => {
+                    elems.push(self.parse_expression()?);
+                }
+            }
+        }
+        
+        Ok(ParseNode::new(ParseNodeType::ArrayLiteral(elems), Position::zeros()))
+    }
+
+
     fn get_next_token_required(&mut self) -> Result<&Token, ParsingError> {
         match self.tokenstream.first() {
             Some(token) => Ok(token),
             None => Err(ParsingError::InsufficientTokens)
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::lexing::Token;
+    use super::{ParseNode, ParseNodeType, Position, TokenType, ParsingError};
+    use super::{Parser}; // Replace with the actual parser struct name.
+
+    #[test]
+    fn test_empty_array() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::OpenSquare, 0, 0, 0), // [
+            Token::new(TokenType::CloseSquare, 0, 0, 0), // ]
+        ]);
+
+        let result = parser.parse_array_literal();
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        // Assert that the parsed node is an empty array
+        assert_eq!(node.node_type, ParseNodeType::ArrayLiteral(vec![]));
+    }
+
+    #[test]
+    fn test_single_element_array() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::OpenSquare, 0, 0, 0),  // [
+            Token::new(TokenType::Integer(1), 0, 0, 0),  // 1
+            Token::new(TokenType::CloseSquare, 0, 0, 0), // ]
+        ]);
+
+        let result = parser.parse_array_literal();
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        // Assert that the parsed node contains one element
+        match node.node_type {
+            ParseNodeType::ArrayLiteral(elems) => {
+                assert_eq!(elems.len(), 1);
+                assert_eq!(elems[0].node_type, (ParseNodeType::IntegerLiteral(1)));
+            }
+            _ => panic!("Expected an ArrayLiteral"),
+        }
+    }
+
+    #[test]
+    fn test_multiple_element_array() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::OpenSquare, 0, 0, 0),  // [
+            Token::new(TokenType::Integer(1), 0, 0, 0),  // 1
+            Token::new(TokenType::Comma, 0, 0, 0),       // ,
+            Token::new(TokenType::Integer(2), 0, 0, 0),  // 2
+            Token::new(TokenType::Comma, 0, 0, 0),       // ,
+            Token::new(TokenType::Integer(3), 0, 0, 0),  // 3
+            Token::new(TokenType::CloseSquare, 0, 0, 0), // ]
+        ]);
+
+        let result = parser.parse_array_literal();
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        // Assert that the parsed node contains multiple elements
+        match node.node_type {
+            ParseNodeType::ArrayLiteral(elems) => {
+                assert_eq!(elems.len(), 3);
+                assert_eq!(elems[0].node_type, ParseNodeType::IntegerLiteral(1));
+                assert_eq!(elems[1].node_type, ParseNodeType::IntegerLiteral(2));
+                assert_eq!(elems[2].node_type, ParseNodeType::IntegerLiteral(3));
+            }
+            _ => panic!("Expected an ArrayLiteral"),
+        }
+    }
+
+    #[test]
+    fn test_array_with_trailing_comma() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::OpenSquare, 0, 0, 0),  // [
+            Token::new(TokenType::Integer(1), 0, 0, 0),  // 1
+            Token::new(TokenType::Comma, 0, 0, 0),       // ,
+            Token::new(TokenType::Integer(2), 0, 0, 0),  // 2
+            Token::new(TokenType::Comma, 0, 0, 0),       // ,
+            Token::new(TokenType::CloseSquare, 0, 0, 0), // ]
+        ]);
+
+        let result = parser.parse_array_literal();
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        match node.node_type {
+            ParseNodeType::ArrayLiteral(elems) => {
+                assert_eq!(elems.len(), 2);
+                assert_eq!(elems[0].node_type, ParseNodeType::IntegerLiteral(1));
+                assert_eq!(elems[1].node_type, ParseNodeType::IntegerLiteral(2));
+            }
+            _ => panic!("Expected an ArrayLiteral"),
+        }
+    }
+
+    #[test]
+    fn test_nested_arrays() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::OpenSquare, 0, 0, 0),   // [
+            Token::new(TokenType::OpenSquare, 0, 0, 0),   // [
+            Token::new(TokenType::Integer(1), 0, 0, 0),   // 1
+            Token::new(TokenType::Comma, 0, 0, 0),        // ,
+            Token::new(TokenType::Integer(2), 0, 0, 0),   // 2
+            Token::new(TokenType::CloseSquare, 0, 0, 0),  // ]
+            Token::new(TokenType::Comma, 0, 0, 0),        // ,
+            Token::new(TokenType::OpenSquare, 0, 0, 0),   // [
+            Token::new(TokenType::Integer(3), 0, 0, 0),   // 3
+            Token::new(TokenType::Comma, 0, 0, 0),        // ,
+            Token::new(TokenType::Integer(4), 0, 0, 0),   // 4
+            Token::new(TokenType::CloseSquare, 0, 0, 0),  // ]
+            Token::new(TokenType::CloseSquare, 0, 0, 0),  // ]
+        ]);
+
+        let result = parser.parse_array_literal();
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        match node.node_type {
+            ParseNodeType::ArrayLiteral(elems) => {
+                assert_eq!(elems.len(), 2);
+
+                // First nested array
+                match &elems[0].node_type {
+                    ParseNodeType::ArrayLiteral(inner_elems) => {
+                        assert_eq!(inner_elems.len(), 2);
+                        assert_eq!(inner_elems[0].node_type, ParseNodeType::IntegerLiteral(1));
+                        assert_eq!(inner_elems[1].node_type, ParseNodeType::IntegerLiteral(2));
+                    }
+                    _ => panic!("Expected a nested ArrayLiteral"),
+                }
+
+                // Second nested array
+                match &elems[1].node_type {
+                    ParseNodeType::ArrayLiteral(inner_elems) => {
+                        assert_eq!(inner_elems.len(), 2);
+                        assert_eq!(inner_elems[0].node_type, ParseNodeType::IntegerLiteral(3));
+                        assert_eq!(inner_elems[1].node_type, ParseNodeType::IntegerLiteral(4));
+                    }
+                    _ => panic!("Expected a nested ArrayLiteral"),
+                }
+            }
+            _ => panic!("Expected an ArrayLiteral"),
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_missing_closing_square_bracket() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::OpenSquare, 0, 0, 0),  // [
+            Token::new(TokenType::Integer(1), 0, 0, 0),  // 1
+            Token::new(TokenType::Comma, 0, 0, 0),       // ,
+            Token::new(TokenType::Integer(2), 0, 0, 0),  // 2
+            // Missing TokenType::CloseSquare
+        ]);
+
+        let _ = parser.parse_array_literal().unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_invalid_token_in_array() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::OpenSquare, 0, 0, 0),  // [
+            Token::new(TokenType::Integer(1), 0, 0, 0),  // 1
+            Token::new(TokenType::Comma, 0, 0, 0),       // ,
+            Token::new(TokenType::ForKeyword, 0, 0, 0),     // Invalid token
+            Token::new(TokenType::CloseSquare, 0, 0, 0), // ]
+        ]);
+
+        parser.parse_array_literal().unwrap();
+    }
+
+    #[test]
+    fn test_valid_assignment() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::LetKeyword, 1, 1, 3),   // let
+            Token::new(TokenType::Identifier(String::from("x")), 1, 5, 1), // x
+            Token::new(TokenType::Colon, 1, 6, 1),        // :
+            Token::new(TokenType::Identifier(String::from("int")), 1, 8, 3), // int
+            Token::new(TokenType::Equals, 1, 12, 1),      // =
+            Token::new(TokenType::Integer(42), 1, 14, 2), // 42
+            Token::new(TokenType::Semicolon, 1, 16, 1),   // ;
+            Token::new(TokenType::Identifier(String::from("x")), 1, 18, 1), // x (continuation)
+        ]);
+
+        let result = parser.parse_assignment(Position::new(1, 1, 3));
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        match node.node_type {
+            ParseNodeType::Assignment(identifier, type_node, expression, continuation) => {
+                assert_eq!(identifier, "x");
+
+                // Check the type node
+                match type_node.node_type {
+                    ParseNodeType::Identifier(type_name) => assert_eq!(type_name, "int"),
+                    _ => panic!("Expected Identifier for type node"),
+                }
+
+                // Check the expression
+                match expression.node_type {
+                    ParseNodeType::IntegerLiteral(value) => assert_eq!(value, 42),
+                    _ => panic!("Expected IntegerLiteral for expression"),
+                }
+
+                // Check the continuation
+                match continuation.node_type {
+                    ParseNodeType::Identifier(name) => assert_eq!(name, "x"),
+                    _ => panic!("Expected Identifier for continuation"),
+                }
+            }
+            _ => panic!("Expected an Assignment node"),
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_assignment_without_continuation() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::LetKeyword, 1, 1, 3),   // let
+            Token::new(TokenType::Identifier(String::from("x")), 1, 5, 1), // x
+            Token::new(TokenType::Colon, 1, 6, 1),        // :
+            Token::new(TokenType::Identifier(String::from("float")), 1, 8, 5), // float
+            Token::new(TokenType::Equals, 1, 14, 1),      // =
+            Token::new(TokenType::Integer(99), 1, 16, 2), // 99
+            Token::new(TokenType::Semicolon, 1, 18, 1),   // ;
+        ]);
+
+        parser.parse_assignment(Position::new(1, 1, 3)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_assignment_with_invalid_type() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::LetKeyword, 1, 1, 3),   // let
+            Token::new(TokenType::Identifier(String::from("x")), 1, 5, 1), // x
+            Token::new(TokenType::Colon, 1, 6, 1),        // :
+            Token::new(TokenType::ForKeyword, 1, 8, 3),   // Invalid type (for)
+            Token::new(TokenType::Equals, 1, 12, 1),      // =
+            Token::new(TokenType::Integer(42), 1, 14, 2), // 42
+            Token::new(TokenType::Semicolon, 1, 16, 1),   // ;
+        ]);
+
+        parser.parse_assignment(Position::new(1, 1, 3)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_assignment_with_missing_equals() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::LetKeyword, 1, 1, 3),   // let
+            Token::new(TokenType::Identifier(String::from("x")), 1, 5, 1), // x
+            Token::new(TokenType::Colon, 1, 6, 1),        // :
+            Token::new(TokenType::Identifier(String::from("int")), 1, 8, 3), // int
+            // Missing equals
+            Token::new(TokenType::Integer(42), 1, 14, 2), // 42
+            Token::new(TokenType::Semicolon, 1, 16, 1),   // ;
+        ]);
+
+        parser.parse_assignment(Position::new(1, 1, 3)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_assignment_with_missing_semicolon() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::LetKeyword, 1, 1, 3),   // let
+            Token::new(TokenType::Identifier(String::from("x")), 1, 5, 1), // x
+            Token::new(TokenType::Colon, 1, 6, 1),        // :
+            Token::new(TokenType::Identifier(String::from("int")), 1, 8, 3), // int
+            Token::new(TokenType::Equals, 1, 12, 1),      // =
+            Token::new(TokenType::Integer(42), 1, 14, 2), // 42
+            // Missing semicolon
+        ]);
+
+        parser.parse_assignment(Position::new(1, 1, 3)).unwrap();
+    }
+
+    #[test]
+    fn test_valid_if_else() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::IfKeyword, 1, 1, 2),          // if
+            Token::new(TokenType::Identifier(String::from("x")), 1, 4, 1), // condition: x
+            Token::new(TokenType::OpenCurly, 1, 6, 1),          // {
+            Token::new(TokenType::Integer(1), 1, 7, 1),         // true branch: 1
+            Token::new(TokenType::CloseCurly, 1, 9, 1),         // }
+            Token::new(TokenType::ElseKeyword, 1, 11, 4),       // else
+            Token::new(TokenType::OpenCurly, 1, 16, 1),         // {
+            Token::new(TokenType::Integer(0), 1, 17, 1),        // false branch: 0
+            Token::new(TokenType::CloseCurly, 1, 19, 1),        // }
+        ]);
+
+        let result = parser.parse_selection(Position::new(1, 1, 2));
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        // Assert that the created node matches the expected structure
+        match node.node_type {
+            ParseNodeType::IfElseStatement(condition, true_branch, false_branch) => {
+                // Check condition
+                match condition.node_type {
+                    ParseNodeType::Identifier(name) => assert_eq!(name, "x"),
+                    _ => panic!("Expected Identifier for condition"),
+                }
+                // Check true branch
+                match true_branch.node_type {
+                    ParseNodeType::IntegerLiteral(value) => assert_eq!(value, 1),
+                    _ => panic!("Expected IntegerLiteral for true branch"),
+                }
+                // Check false branch
+                match false_branch.node_type {
+                    ParseNodeType::IntegerLiteral(value) => assert_eq!(value, 0),
+                    _ => panic!("Expected IntegerLiteral for false branch"),
+                }
+            }
+            _ => panic!("Expected IfElseStatement node"),
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_missing_else() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::IfKeyword, 1, 1, 2),          // if
+            Token::new(TokenType::Identifier(String::from("x")), 1, 4, 1), // condition: x
+            Token::new(TokenType::OpenCurly, 1, 6, 1),          // {
+            Token::new(TokenType::Integer(1), 1, 7, 1),         // true branch: 1
+            Token::new(TokenType::CloseCurly, 1, 9, 1),         // }
+            // Missing else branch
+        ]);
+
+        parser.parse_selection(Position::new(1, 1, 2)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_missing_true_branch() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::IfKeyword, 1, 1, 2),          // if
+            Token::new(TokenType::Identifier(String::from("x")), 1, 4, 1), // condition: x
+            Token::new(TokenType::OpenCurly, 1, 6, 1),          // {
+            // Missing true branch
+            Token::new(TokenType::CloseCurly, 1, 7, 1),         // }
+            Token::new(TokenType::ElseKeyword, 1, 9, 4),        // else
+            Token::new(TokenType::OpenCurly, 1, 14, 1),         // {
+            Token::new(TokenType::Integer(0), 1, 15, 1),        // false branch: 0
+            Token::new(TokenType::CloseCurly, 1, 17, 1),        // }
+        ]);
+
+        parser.parse_selection(Position::new(1, 1, 2)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_missing_false_branch() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::IfKeyword, 1, 1, 2),          // if
+            Token::new(TokenType::Identifier(String::from("x")), 1, 4, 1), // condition: x
+            Token::new(TokenType::OpenCurly, 1, 6, 1),          // {
+            Token::new(TokenType::Integer(1), 1, 7, 1),         // true branch: 1
+            Token::new(TokenType::CloseCurly, 1, 9, 1),         // }
+            Token::new(TokenType::ElseKeyword, 1, 11, 4),       // else
+            Token::new(TokenType::OpenCurly, 1, 16, 1),         // {
+            // Missing false branch
+            Token::new(TokenType::CloseCurly, 1, 17, 1),        // }
+        ]);
+
+        parser.parse_selection(Position::new(1, 1, 2)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_missing_condition() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::IfKeyword, 1, 1, 2),     // if
+            // Missing condition
+            Token::new(TokenType::OpenCurly, 1, 6, 1),     // {
+            Token::new(TokenType::Integer(1), 1, 7, 1),    // true branch: 1
+            Token::new(TokenType::CloseCurly, 1, 9, 1),    // }
+            Token::new(TokenType::ElseKeyword, 1, 11, 4),  // else
+            Token::new(TokenType::OpenCurly, 1, 16, 1),    // {
+            Token::new(TokenType::Integer(0), 1, 17, 1),   // false branch: 0
+            Token::new(TokenType::CloseCurly, 1, 19, 1),   // }
+        ]);
+
+        parser.parse_selection(Position::new(1, 1, 2)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_invalid_token_in_condition() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::IfKeyword, 1, 1, 2),     // if
+            Token::new(TokenType::ForKeyword, 1, 4, 3),    // Invalid condition token
+            Token::new(TokenType::OpenCurly, 1, 6, 1),     // {
+            Token::new(TokenType::Integer(1), 1, 7, 1),    // true branch: 1
+            Token::new(TokenType::CloseCurly, 1, 9, 1),    // }
+            Token::new(TokenType::ElseKeyword, 1, 11, 4),  // else
+            Token::new(TokenType::OpenCurly, 1, 16, 1),    // {
+            Token::new(TokenType::Integer(0), 1, 17, 1),   // false branch: 0
+            Token::new(TokenType::CloseCurly, 1, 19, 1),   // }
+        ]);
+
+        parser.parse_selection(Position::new(1, 1, 2)).unwrap();
     }
 }
