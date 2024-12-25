@@ -4,8 +4,8 @@ mod parsing;
 
 fn main() {
     let mut lexer = lexing::Lexer::new("
-fn main() -> [[[int]]] {
-    1
+fn main() -> [int] {
+    10 :: 100
 }
 ".to_string());
     lexer.lex().unwrap();

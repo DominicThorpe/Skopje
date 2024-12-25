@@ -29,9 +29,13 @@ pub enum ParseNodeType {
     StringLiteral(String),
     /// Elements of the array literal
     ArrayLiteral(Vec<ParseNode>),
+    /// Operation, left expression, right expression
     BinaryOperation(String, Box<ParseNode>, Box<ParseNode>),
+    /// Operation, sub-expression
     UnaryOperation(String, Box<ParseNode>),
+    /// Array being indexes, and expression of index
     ArrayIndexOperation(Box<ParseNode>, Box<ParseNode>),
+    /// Function name, vector of parameter expressions
     FunctionCall(String, Vec<ParseNode>),
     /// Type contained within the array, which may be another array type
     ArrayType(Box<ParseNode>),
@@ -340,6 +344,7 @@ impl Parser {
                 TokenType::Minus => "-",
                 TokenType::Star => "*",
                 TokenType::Slash => "/",
+                TokenType::DoubleColon => "::",
                 TokenType::OpenSquare => "[",
                 _ => break
             };
@@ -389,7 +394,7 @@ impl Parser {
     
     fn get_postfix_binding_power(&self, op: &str) -> Option<(u8, ())> {
         match op {
-            "++" | "--" | "[" => Some((7, ())),
+            "++" | "--" | "[" => Some((9, ())),
             _ => None
         }
     }
@@ -399,6 +404,7 @@ impl Parser {
         match op {
             "+" | "-" => (1, 2),
             "*" | "/" => (3, 4),
+            "::" => (5, 6),
             _ => panic!("Invalid operator")
         }
     }
@@ -406,7 +412,7 @@ impl Parser {
     
     fn get_prefix_binding_power(&self, op: &str) -> ((), u8) {
         match op {
-            "+" | "-" => ((), 6),
+            "+" | "-" => ((), 8),
             _ => panic!("Invalid operator")
         }
     }

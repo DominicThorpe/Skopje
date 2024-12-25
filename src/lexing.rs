@@ -59,6 +59,7 @@ pub enum TokenType {
     Star,
     Slash,
     Colon,
+    DoubleColon
 }
 
 
@@ -139,10 +140,14 @@ impl Lexer {
             "}" => Some(Token::new(TokenType::CloseCurly, self.line, self.col, 1)),
             "[" => Some(Token::new(TokenType::OpenSquare, self.line, self.col, 1)),
             "]" => Some(Token::new(TokenType::CloseSquare, self.line, self.col, 1)),
-            ":" => Some(Token::new(TokenType::Colon, self.line, self.col, 1)),
             ";" => Some(Token::new(TokenType::Semicolon, self.line, self.col, 1)),
             "," => Some(Token::new(TokenType::Comma, self.line, self.col, 1)),
             "+" => Some(Token::new(TokenType::Plus, self.line, self.col, 1)),
+            ":" => {
+                if self.assert_next_character_not(':', string.len() - 1) {
+                    Some(Token::new(TokenType::Colon, self.line, self.col, 1))
+                } else { None }
+            }
             "=" => {
                 if self.assert_next_character_not('=', string.len() - 1) {
                     Some(Token::new(TokenType::Equals, self.line, self.col, 1))
@@ -153,6 +158,7 @@ impl Lexer {
                     Some(Token::new(TokenType::Minus, self.line, self.col, 1))
                 } else { None }
             },
+            "::" => Some(Token::new(TokenType::DoubleColon, self.line, self.col, 2)),
             "*" => Some(Token::new(TokenType::Star, self.line, self.col, 1)),
             "/" => Some(Token::new(TokenType::Slash, self.line, self.col, 1)),
             "<" => Some(Token::new(TokenType::LessThan, self.line, self.col, 1)),
