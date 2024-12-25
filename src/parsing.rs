@@ -4,7 +4,7 @@ use crate::lexing::TokenType::LetKeyword;
 use crate::parsing::ParseNodeType::IfElseStatement;
 
 #[allow(dead_code)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ParseNodeType {
     /// List of function declarations,
     Program(Vec<ParseNode>),
@@ -29,12 +29,16 @@ pub enum ParseNodeType {
     StringLiteral(String),
     /// Elements of the array literal
     ArrayLiteral(Vec<ParseNode>),
+    BinaryOperation(String, Box<ParseNode>, Box<ParseNode>),
+    UnaryOperation(String, Box<ParseNode>),
+    ArrayIndexOperation(Box<ParseNode>, Box<ParseNode>),
+    FunctionCall(String, Vec<ParseNode>),
     /// Unit type
     Unit
 }
 
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParseNode {
     node_type: ParseNodeType,
     position: Position
@@ -287,6 +291,111 @@ impl Parser {
 
         Ok(params)
     }
+    
+    
+    fn pratt_parse_expr(&mut self, min_power: u8) -> Result<ParseNode, ParsingError> { 
+        let mut lhs = match self.get_next_token_required()?.token_type {
+            TokenType::Minus => {
+                self.tokenstream.remove(0);
+                let (_, right_power) = self.get_prefix_binding_power("-");
+                let rhs = self.pratt_parse_expr(right_power)?;
+                ParseNode::new(ParseNodeType::UnaryOperation("-".to_string(), Box::new(rhs)), Position::zeros())
+            }
+            TokenType::Plus => {
+                self.tokenstream.remove(0);
+                let (_, right_power) = self.get_prefix_binding_power("+");
+                let rhs = self.pratt_parse_expr(right_power)?;
+                ParseNode::new(ParseNodeType::UnaryOperation("-".to_string(), Box::new(rhs)), Position::zeros())
+            }
+            TokenType::OpenParen => {
+                self.tokenstream.remove(0);
+                let lhs = self.pratt_parse_expr(0)?;
+                self.assert_next_token_of_type(TokenType::CloseParen)?;
+                lhs
+            }
+            _ => self.parse_value()?
+        };
+        loop {
+            let next_token = match self.get_next_token_required() {
+                Ok(t) => t,
+                Err(_) => break
+            };
+            
+            let op = match &next_token.token_type {
+                TokenType::Plus => "+",
+                TokenType::Minus => "-",
+                TokenType::Star => "*",
+                TokenType::Slash => "/",
+                TokenType::OpenSquare => "[",
+                _ => break
+            };
+            
+            if let Some((left_power, ())) = self.get_postfix_binding_power(op) {
+                if left_power < min_power {
+                    break;
+                }
+                self.tokenstream.remove(0);
+                
+                lhs = if op == "[" {
+                    let rhs = self.pratt_parse_expr(0)?;
+                    self.assert_next_token_of_type(TokenType::CloseSquare)?;
+                    ParseNode::new(ParseNodeType::ArrayIndexOperation(
+                        Box::new(lhs),
+                        Box::new(rhs)
+                    ), Position::zeros())
+                } else {
+                    ParseNode::new(ParseNodeType::UnaryOperation(
+                        op.to_string(),
+                        Box::new(lhs)),
+                        Position::zeros()
+                    )
+                };
+                continue;
+            }
+                        
+            let (left_power, right_power) = self.get_infix_binding_power(op);
+            if left_power < min_power {
+                break;
+            }
+            
+            let _ = self.get_next_token_required()?;
+            self.tokenstream.remove(0);
+            
+            let rhs = self.pratt_parse_expr(right_power)?;
+            lhs = ParseNode::new(ParseNodeType::BinaryOperation(
+                op.to_string(), 
+                Box::new(lhs), 
+                Box::new(rhs)
+            ), Position::zeros());
+        }
+        
+        Ok(lhs)
+    }
+    
+    
+    fn get_postfix_binding_power(&self, op: &str) -> Option<(u8, ())> {
+        match op {
+            "++" | "--" | "[" => Some((7, ())),
+            _ => None
+        }
+    }
+    
+    
+    fn get_infix_binding_power(&self, op: &str) -> (u8, u8) {
+        match op {
+            "+" | "-" => (1, 2),
+            "*" | "/" => (3, 4),
+            _ => panic!("Invalid operator")
+        }
+    }
+    
+    
+    fn get_prefix_binding_power(&self, op: &str) -> ((), u8) {
+        match op {
+            "+" | "-" => ((), 6),
+            _ => panic!("Invalid operator")
+        }
+    }
 
 
     fn parse_expression(&mut self) -> Result<ParseNode, ParsingError> {
@@ -295,7 +404,7 @@ impl Parser {
             TokenType::IfKeyword => self.parse_selection(next_token.position),
             TokenType::ForKeyword => self.parse_loop(next_token.position),
             TokenType::LetKeyword => self.parse_assignment(next_token.position),
-            _ => self.parse_value()
+            _ => self.pratt_parse_expr(0)
         }
     }
     
@@ -422,17 +531,52 @@ impl Parser {
 
 
     fn parse_value(&mut self) -> Result<ParseNode, ParsingError> {
-         let node_type = match &self.tokenstream.first().unwrap().token_type {
-             TokenType::Identifier(s) => ParseNodeType::Identifier(s.clone()),
-             TokenType::Integer(i) => ParseNodeType::IntegerLiteral(*i),
-             TokenType::OpenSquare => return self.parse_array_literal(),
-             TokenType::String(s) => ParseNodeType::StringLiteral(s.clone()),
-             TokenType::Float(f) => ParseNodeType::FloatLiteral(*f),
-             _ => return Err(ParsingError::InvalidToken(self.tokenstream.first().unwrap().clone(), 0, 0)),
-         };
+        let next_token = self.get_next_token_required()?.clone();
+        let node_type = match &next_token.token_type {
+            TokenType::Identifier(s) => 
+                return self.parse_identifier_or_function_call(s, next_token.position),
+            TokenType::Integer(i) => ParseNodeType::IntegerLiteral(*i),
+            TokenType::OpenSquare => return self.parse_array_literal(),
+            TokenType::String(s) => ParseNodeType::StringLiteral(s.clone()),
+            TokenType::Float(f) => ParseNodeType::FloatLiteral(*f),
+            _ => return Err(ParsingError::InvalidToken(self.tokenstream.first().unwrap().clone(), 0, 0)),
+        };
         self.tokenstream.remove(0);
 
         Ok(ParseNode::new(node_type, Position::zeros()))
+    }
+    
+    
+    fn parse_identifier_or_function_call(&mut self, id: &str, pos: Position) -> Result<ParseNode, ParsingError> {
+        self.tokenstream.remove(0);
+        
+        let next_token = self.get_next_token_required()?; 
+        match next_token.token_type {
+            TokenType::OpenParen => {
+                let arguments = self.parse_function_call_params()?;
+                Ok(ParseNode::new(ParseNodeType::FunctionCall(id.to_string(), arguments), pos))
+            },
+            _ => Ok(ParseNode::new(ParseNodeType::Identifier(id.to_string()), pos))
+        }
+    }
+    
+    
+    fn parse_function_call_params(&mut self) -> Result<Vec<ParseNode>, ParsingError> {
+        self.tokenstream.remove(0);
+        let mut params: Vec<ParseNode> = vec![];
+        
+        loop {
+            let next_token = self.get_next_token_required()?;
+            match next_token.token_type {
+                TokenType::CloseParen => { self.tokenstream.remove(0); break },
+                TokenType::Comma => { self.tokenstream.remove(0); continue },
+                _ => {
+                    params.push(self.parse_expression()?);
+                } 
+            }
+        }
+        
+        Ok(params)
     }
     
     
@@ -467,7 +611,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use crate::lexing::Token;
-    use super::{ParseNode, ParseNodeType, Position, TokenType, ParsingError};
+    use super::{ParseNodeType, Position, TokenType};
     use super::{Parser}; // Replace with the actual parser struct name.
 
     #[test]
@@ -648,13 +792,10 @@ mod tests {
             Token::new(TokenType::Equals, 1, 12, 1),      // =
             Token::new(TokenType::Integer(42), 1, 14, 2), // 42
             Token::new(TokenType::Semicolon, 1, 16, 1),   // ;
-            Token::new(TokenType::Identifier(String::from("x")), 1, 18, 1), // x (continuation)
+            Token::new(TokenType::Integer(1), 1, 18, 1), // x (continuation)
         ]);
 
-        let result = parser.parse_assignment(Position::new(1, 1, 3));
-        assert!(result.is_ok());
-        let node = result.unwrap();
-
+        let node = parser.parse_assignment(Position::new(1, 1, 3)).unwrap();
         match node.node_type {
             ParseNodeType::Assignment(identifier, type_node, expression, continuation) => {
                 assert_eq!(identifier, "x");
@@ -673,7 +814,7 @@ mod tests {
 
                 // Check the continuation
                 match continuation.node_type {
-                    ParseNodeType::Identifier(name) => assert_eq!(name, "x"),
+                    ParseNodeType::IntegerLiteral(val) => assert_eq!(val, 1),
                     _ => panic!("Expected Identifier for continuation"),
                 }
             }
@@ -871,5 +1012,135 @@ mod tests {
         ]);
 
         parser.parse_selection(Position::new(1, 1, 2)).unwrap();
+    }
+
+    #[test]
+    fn test_parse_identifier_as_variable() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::Identifier(String::from("my_variable")), 1, 1, 11), // my_variable
+            Token::new(TokenType::Semicolon, 1, 12, 1),                              // ;
+        ]);
+
+        let result = parser.parse_identifier_or_function_call("my_variable", Position::new(1, 1, 11));
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        match node.node_type {
+            ParseNodeType::Identifier(name) => assert_eq!(name, "my_variable"),
+            _ => panic!("Expected Identifier node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_identifier_as_function_call_with_no_params() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::Identifier(String::from("my_function")), 1, 1, 11), // my_function
+            Token::new(TokenType::OpenParen, 1, 12, 1),                             // (
+            Token::new(TokenType::CloseParen, 1, 13, 1),                            // )
+            Token::new(TokenType::Semicolon, 1, 14, 1),                             // ;
+        ]);
+
+        let result = parser.parse_identifier_or_function_call("my_function", Position::new(1, 1, 11));
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        match node.node_type {
+            ParseNodeType::FunctionCall(name, arguments) => {
+                assert_eq!(name, "my_function");
+                assert!(arguments.is_empty());
+            }
+            _ => panic!("Expected FunctionCall node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_call_with_one_param() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::Identifier(String::from("my_function")), 1, 1, 11), // my_function
+            Token::new(TokenType::OpenParen, 1, 12, 1),                             // (
+            Token::new(TokenType::Integer(42), 1, 13, 2),                           // 42
+            Token::new(TokenType::CloseParen, 1, 15, 1),                            // )
+            Token::new(TokenType::Semicolon, 1, 16, 1),                             // ;
+        ]);
+
+        let result = parser.parse_identifier_or_function_call("my_function", Position::new(1, 1, 11)).unwrap();
+        match result.node_type {
+            ParseNodeType::FunctionCall(name, arguments) => {
+                assert_eq!(name, "my_function");
+                assert_eq!(arguments.len(), 1);
+                match arguments[0].node_type {
+                    ParseNodeType::IntegerLiteral(value) => assert_eq!(value, 42),
+                    _ => panic!("Expected IntegerLiteral node for parameter"),
+                }
+            }
+            _ => panic!("Expected FunctionCall node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_call_with_multiple_params() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::Identifier(String::from("my_function")), 1, 1, 11), // my_function
+            Token::new(TokenType::OpenParen, 1, 12, 1),                             // (
+            Token::new(TokenType::Integer(42), 1, 13, 2),                           // 42
+            Token::new(TokenType::Comma, 1, 15, 1),                                 // ,
+            Token::new(TokenType::String(String::from("hello")), 1, 17, 7),  // "hello"
+            Token::new(TokenType::CloseParen, 1, 24, 1),                            // )
+            Token::new(TokenType::Semicolon, 1, 25, 1),                             // ;
+        ]);
+
+        let result = parser.parse_identifier_or_function_call("my_function", Position::new(1, 1, 11));
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        match node.node_type {
+            ParseNodeType::FunctionCall(name, arguments) => {
+                assert_eq!(name, "my_function");
+                assert_eq!(arguments.len(), 2);
+
+                // Check first argument
+                match arguments[0].node_type {
+                    ParseNodeType::IntegerLiteral(value) => assert_eq!(value, 42),
+                    _ => panic!("Expected IntegerLiteral node for first parameter"),
+                }
+
+                // Check second argument
+                match arguments[1].node_type.clone() {
+                    ParseNodeType::StringLiteral(value) => assert_eq!(value, "hello"),
+                    _ => panic!("Expected StringLiteral node for second parameter"),
+                }
+            }
+            _ => panic!("Expected FunctionCall node"),
+        }
+    }
+
+    #[test]
+    fn test_parse_function_call_with_trailing_comma() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::Identifier(String::from("my_function")), 1, 1, 11), // my_function
+            Token::new(TokenType::OpenParen, 1, 12, 1),                             // (
+            Token::new(TokenType::Integer(42), 1, 13, 2),                           // 42
+            Token::new(TokenType::Comma, 1, 15, 1),                                 // ,
+            Token::new(TokenType::String(String::from("trailing")), 1, 17, 9), // "trailing"
+            Token::new(TokenType::Comma, 1, 26, 1),                                 // ,
+            Token::new(TokenType::CloseParen, 1, 27, 1),                            // )
+            Token::new(TokenType::Semicolon, 1, 28, 1),                             // ;
+        ]);
+
+        parser.parse_identifier_or_function_call("my_function", Position::new(1, 1, 11)).unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_parse_function_call_with_invalid_params() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::Identifier(String::from("my_function")), 1, 1, 11), // my_function
+            Token::new(TokenType::OpenParen, 1, 12, 1),                             // (
+            Token::new(TokenType::FnKeyword, 1, 13, 1),                               // Invalid token
+            Token::new(TokenType::CloseParen, 1, 14, 1),                            // )
+            Token::new(TokenType::Semicolon, 1, 15, 1),                             // ;
+        ]);
+
+        parser.parse_identifier_or_function_call("my_function", Position::new(1, 1, 11)).unwrap();
     }
 }

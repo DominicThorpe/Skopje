@@ -5,7 +5,7 @@ mod parsing;
 fn main() {
     let mut lexer = lexing::Lexer::new("
 fn main() -> int {
-    \"hello
+    foo(1, 3, b)
 }
 ".to_string());
     lexer.lex().unwrap();
