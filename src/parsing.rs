@@ -33,6 +33,8 @@ pub enum ParseNodeType {
     UnaryOperation(String, Box<ParseNode>),
     ArrayIndexOperation(Box<ParseNode>, Box<ParseNode>),
     FunctionCall(String, Vec<ParseNode>),
+    /// Type contained within the array, which may be another array type
+    ArrayType(Box<ParseNode>),
     /// Unit type
     Unit
 }
@@ -223,13 +225,7 @@ impl Parser {
         self.assert_next_token_of_type(TokenType::Arrow)?;
 
         // get the return type of the function
-        let next_token = self.get_next_token_required()?;
-        let return_type = match next_token.token_type.clone() {
-            TokenType::Identifier(identifier) =>
-                ParseNode::new(ParseNodeType::Identifier(identifier), next_token.position),
-            _ => return Err(ParsingError::InvalidToken(next_token.clone(), 0, 0)),
-        };
-        self.tokenstream.remove(0);
+        let return_type = self.parse_type()?;
 
         // get the return type of the function
         self.assert_next_token_of_type(TokenType::OpenCurly)?;
@@ -244,6 +240,29 @@ impl Parser {
         );
 
         Ok(ParseNode::new(node_type, declaration_pos))
+    }
+    
+    
+    fn parse_type(&mut self) -> Result<ParseNode, ParsingError> {
+        let next_token = self.get_next_token_required()?.clone();
+        let token_pos = next_token.position;
+        self.tokenstream.remove(0);
+        
+        match next_token.token_type {
+            TokenType::OpenSquare => {
+                let result = ParseNode::new(
+                    ParseNodeType::ArrayType(Box::new(self.parse_type()?)), 
+                    token_pos
+                );
+                self.assert_next_token_of_type(TokenType::CloseSquare)?;
+                Ok(result)
+            }
+            TokenType::Identifier(identifier) => Ok(ParseNode::new(
+                ParseNodeType::Identifier(identifier.to_string()), 
+                token_pos
+            )),
+            _ => Err(ParsingError::InvalidToken(next_token.clone(), token_pos.line, token_pos.col))
+        }
     }
 
 
@@ -272,13 +291,7 @@ impl Parser {
                     self.assert_next_token_of_type(TokenType::Colon)?;
 
                     // get the type of the parameter
-                    let param_type = match &self.tokenstream.first().unwrap().token_type {
-                        TokenType::Identifier(s) =>
-                            ParseNode::new(ParseNodeType::Identifier(s.to_string()), Position::zeros()),
-                        _ => return Err(ParsingError::InvalidToken(self.tokenstream.first().unwrap().clone(), 0, 0)),
-                    };
-                    self.tokenstream.remove(0);
-
+                    let param_type = self.parse_type()?;
                     let node_type = ParseNodeType::FunctionParameter(
                         identifier.to_string(),
                         Box::new(param_type)
@@ -315,6 +328,7 @@ impl Parser {
             }
             _ => self.parse_value()?
         };
+        
         loop {
             let next_token = match self.get_next_token_required() {
                 Ok(t) => t,
@@ -496,23 +510,9 @@ impl Parser {
             ))
         };
         
-        self.assert_next_token_of_type(TokenType::Colon)?;
-        
         // get type
-        let next_token = self.get_next_token_required()?.clone();
-        self.tokenstream.remove(0);
-        let token_pos = next_token.position;
-        let type_node = match &next_token.token_type {
-            TokenType::Identifier(id) => ParseNode::new(
-                ParseNodeType::Identifier(id.to_string()), 
-                token_pos
-            ),
-            _ => return Err(ParsingError::InvalidToken(
-                next_token.clone(),
-                token_pos.line,
-                token_pos.col
-            ))
-        };
+        self.assert_next_token_of_type(TokenType::Colon)?;
+        let type_node = self.parse_type()?;
         
         self.assert_next_token_of_type(TokenType::Equals)?;
         let expression = self.parse_expression()?;        
