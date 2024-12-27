@@ -46,8 +46,8 @@ pub enum ParseNodeType {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseNode {
-    node_type: ParseNodeType,
-    position: Position
+    pub node_type: ParseNodeType,
+    pub position: Position
 }
 
 
