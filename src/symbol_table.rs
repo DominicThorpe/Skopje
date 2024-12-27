@@ -43,18 +43,18 @@ impl SymbolTable {
     pub fn new() -> Self {
         Self { symbols: Vec::new() }
     }
-    
-    
+
+
     pub fn add_symbol(&mut self, name: String, symbol_type: Type, symbol_position: (usize, usize)) {
         self.symbols.push(SymbolTableEntry { name, symbol_type, symbol_position });
     }
-    
-    
+
+
     pub fn get_symbol(&self, name: &str) -> Option<&SymbolTableEntry> {
         self.symbols.iter().find(|s| s.name == name)
     }
-    
-    
+
+
     pub fn get_symbol_type(&self, name: &str) -> Option<&Type> {
         self.get_symbol(name).map(|s| &s.symbol_type)
     }

@@ -9,8 +9,8 @@ mod annotator;
 
 fn main() {
     let mut lexer = lexing::Lexer::new("
-fn main() -> [int] {
-    1
+fn main(hello: int) -> int {
+    hello
 }
 ".to_string());
     lexer.lex().unwrap();

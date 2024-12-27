@@ -31,6 +31,7 @@ pub enum AnnotatedNodeType {
     String(String),
     Bool(bool),
     Char(char),
+    Identifier(String),
     Array(Box<AnnotatedNode>),
     Unit
 }
@@ -83,6 +84,7 @@ impl Annotator {
                 (parse_tree.position.line, parse_tree.position.col)
             )),
             
+            ParseNodeType::Identifier(id) => self.get_annotated_id(id.as_str(), &symbol_table),            
             _ => Ok(AnnotatedNode::new(symbol_table, AnnotatedNodeType::Unit, (0, 0)))
         }
     }
@@ -94,10 +96,13 @@ impl Annotator {
             other => return Err(Box::new(ParsingError::UnexpectedParseNode(other, parse_tree.position.line, parse_tree.position.col)))
         };
         
+        let mut new_symbol_table = symbol_table.clone();
         let params: IndexMap<String, Type> = params.into_iter()
             .map(|p| match p.node_type {
                 ParseNodeType::FunctionParameter(s, t) => {
                     let annotated_type = self.get_annotated_type(*t, symbol_table.clone()).unwrap();
+                    let (p_line, p_col) = (p.position.line, p.position.col);
+                    new_symbol_table.add_symbol(s.clone(), annotated_type.clone(), (p_line, p_col));
                     Ok((s, annotated_type))
                 },
                 
@@ -108,7 +113,7 @@ impl Annotator {
             .collect::<Result<_, Box<ParsingError>>>()?;
         
         let return_type: Type = self.get_annotated_type(*rt, symbol_table.clone())?;
-        let body: AnnotatedNode = self.annotate(*body, symbol_table.clone())?;
+        let body: AnnotatedNode = self.annotate(*body, new_symbol_table)?;
         let node_type = AnnotatedNodeType::Function(name, params, return_type, Box::new(body));
         Ok(AnnotatedNode::new(symbol_table, node_type, (parse_tree.position.line, parse_tree.position.col)))
     }
@@ -129,6 +134,18 @@ impl Annotator {
             other => Err(Box::new(ParsingError::UnexpectedParseNode(
                 other, parse_tree.position.line, parse_tree.position.col
             )))
+        }
+    }
+    
+    
+    fn get_annotated_id(&self, id: &str, symbol_table: &SymbolTable) -> Result<AnnotatedNode, Box<dyn Error>> {
+        match symbol_table.get_symbol(id) {
+            None => Err(Box::new(SemanticError::UnknownSymbol(id.to_string(), 0, 0))),
+            Some(s) => Ok(AnnotatedNode::new(
+                symbol_table.clone(),
+                AnnotatedNodeType::Identifier(id.to_string()), 
+                (0, 0)
+            ))
         }
     }
 }
