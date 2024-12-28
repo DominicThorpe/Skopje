@@ -83,8 +83,8 @@ impl Annotator {
                 AnnotatedNodeType::Int(value),
                 (parse_tree.position.line, parse_tree.position.col)
             )),
-            
-            ParseNodeType::Identifier(id) => self.get_annotated_id(id.as_str(), &symbol_table),            
+
+            ParseNodeType::Identifier(id) => self.get_annotated_id(id.as_str(), &symbol_table),
             _ => Ok(AnnotatedNode::new(symbol_table, AnnotatedNodeType::Unit, (0, 0)))
         }
     }
@@ -105,7 +105,7 @@ impl Annotator {
                     new_symbol_table.add_symbol(s.clone(), annotated_type.clone(), (p_line, p_col));
                     Ok((s, annotated_type))
                 },
-                
+
                 other => Err(Box::new(ParsingError::UnexpectedParseNode(
                     other, p.position.line, p.position.col
                 ))),
@@ -136,14 +136,14 @@ impl Annotator {
             )))
         }
     }
-    
-    
+
+
     fn get_annotated_id(&self, id: &str, symbol_table: &SymbolTable) -> Result<AnnotatedNode, Box<dyn Error>> {
         match symbol_table.get_symbol(id) {
             None => Err(Box::new(SemanticError::UnknownSymbol(id.to_string(), 0, 0))),
             Some(s) => Ok(AnnotatedNode::new(
                 symbol_table.clone(),
-                AnnotatedNodeType::Identifier(id.to_string()), 
+                AnnotatedNodeType::Identifier(id.to_string()),
                 (0, 0)
             ))
         }

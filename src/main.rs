@@ -12,14 +12,18 @@ fn main() {
 fn main(hello: int) -> int {
     hello
 }
+
+fn add(a: int, b: int) -> int {
+    a + b
+}
 ".to_string());
     lexer.lex().unwrap();
     
     let mut parser = parsing::Parser::new(lexer.tokens);
     let parse_tree = parser.parse().unwrap();
-    let annotated_tree = Annotator::new().annotate(parse_tree, SymbolTable::new()).unwrap();
+    let annotated_tree = Annotator::new().annotate(parse_tree.clone(), SymbolTable::new()).unwrap();
     
-    println!("{:#?}", annotated_tree);
+    println!("{:#?}", parse_tree);
 }
 
 

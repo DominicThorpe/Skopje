@@ -189,9 +189,21 @@ impl Parser {
     /// }
     /// ```
     pub fn parse(&mut self) -> Result<ParseNode, ParsingError> {
+        let mut function_declarations: Vec<ParseNode> = vec![];
+        loop {
+            let next_node = self.parse_function_declaration()?;
+            function_declarations.push(next_node);
+            
+            let next_token = self.get_next_token_required()?;
+            match next_token.token_type {
+                TokenType::End => break,
+                _ => continue
+            }
+        }
+        
         Ok(
             ParseNode::new(
-                ParseNodeType::Program(vec![self.parse_function_declaration()?]),
+                ParseNodeType::Program(function_declarations),
                Position { line: 1, col: 1, length: 0 }
             ))
     }
@@ -1148,5 +1160,178 @@ mod tests {
         ]);
 
         parser.parse_identifier_or_function_call("my_function", Position::new(1, 1, 11)).unwrap();
+    }
+
+    #[test]
+    fn test_valid_multiple_function_parsing() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::FnKeyword, 1, 1, 2),             // fn
+            Token::new(TokenType::Identifier(String::from("func1")), 1, 4, 5), // func1
+            Token::new(TokenType::OpenParen, 1, 9, 1),             // (
+            Token::new(TokenType::CloseParen, 1, 10, 1),            // )
+            Token::new(TokenType::Arrow, 1, 12, 2),                // ->
+            Token::new(TokenType::Identifier(String::from("int")), 1, 15, 3), // int
+            Token::new(TokenType::OpenCurly, 1, 19, 1),            // {
+            Token::new(TokenType::Integer(42), 2, 2, 2),           // 42 
+            Token::new(TokenType::CloseCurly, 3, 1, 1),            // }
+
+            Token::new(TokenType::FnKeyword, 4, 1, 2),             // fn
+            Token::new(TokenType::Identifier(String::from("func2")), 4, 4, 5), // func2
+            Token::new(TokenType::OpenParen, 4, 9, 1),             // (
+            Token::new(TokenType::Identifier(String::from("x")), 4, 10, 1), // x
+            Token::new(TokenType::Colon, 4, 11, 1),                // :
+            Token::new(TokenType::Identifier(String::from("int")), 4, 13, 3), // int
+            Token::new(TokenType::CloseParen, 4, 16, 1),           // )
+            Token::new(TokenType::Arrow, 4, 18, 2),                // ->
+            Token::new(TokenType::Identifier(String::from("int")), 4, 21, 4), // void
+            Token::new(TokenType::OpenCurly, 4, 26, 1),            // {
+            Token::new(TokenType::Integer(69), 2, 2, 2),           // 69
+            Token::new(TokenType::CloseCurly, 5, 1, 1),            // }
+            Token::new(TokenType::End, 5, 2, 1)
+        ]);
+
+        let node = parser.parse().unwrap();
+
+        // Assert that the program contains two functions
+        match node.node_type {
+            ParseNodeType::Program(functions) => {
+                assert_eq!(functions.len(), 2);
+                match &functions[0].node_type {
+                    ParseNodeType::FunctionDeclaration(name, _, _, _) => {
+                        assert_eq!(name, "func1");
+                    }
+                    _ => panic!("Expected FunctionDeclaration for func1"),
+                }
+                match &functions[1].node_type {
+                    ParseNodeType::FunctionDeclaration(name, params, _, _) => {
+                        assert_eq!(name, "func2");
+                        assert_eq!(params.len(), 1);
+                    }
+                    _ => panic!("Expected FunctionDeclaration for func2"),
+                }
+            }
+            _ => panic!("Expected Program node"),
+        }
+    }
+
+    #[test]
+    fn test_function_with_missing_body() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::FnKeyword, 1, 1, 2),             // fn
+            Token::new(TokenType::Identifier(String::from("func")), 1, 4, 4), // func
+            Token::new(TokenType::OpenParen, 1, 8, 1),             // (
+            Token::new(TokenType::CloseParen, 1, 9, 1),            // )
+            Token::new(TokenType::Arrow, 1, 11, 2),                // ->
+            Token::new(TokenType::Identifier(String::from("int")), 1, 14, 3), // int
+            // Missing the body
+        ]);
+
+        let result = parser.parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_function_with_missing_return_type() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::FnKeyword, 1, 1, 2),             // fn
+            Token::new(TokenType::Identifier(String::from("func")), 1, 4, 4), // func
+            Token::new(TokenType::OpenParen, 1, 8, 1),             // (
+            Token::new(TokenType::CloseParen, 1, 9, 1),            // )
+            Token::new(TokenType::OpenCurly, 1, 12, 1),            // {
+            Token::new(TokenType::Integer(42), 2, 2, 2),           // 42 
+            Token::new(TokenType::CloseCurly, 3, 1, 1),            // }
+        ]);
+
+        let result = parser.parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_function_with_duplicate_parameters() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::FnKeyword, 1, 1, 2),             // fn
+            Token::new(TokenType::Identifier(String::from("func")), 1, 4, 4), // func
+            Token::new(TokenType::OpenParen, 1, 8, 1),             // (
+            Token::new(TokenType::Identifier(String::from("x")), 1, 9, 1), // x
+            Token::new(TokenType::Colon, 1, 10, 1),                // :
+            Token::new(TokenType::Identifier(String::from("int")), 1, 12, 3), // int
+            Token::new(TokenType::Comma, 1, 15, 1),                // ,
+            Token::new(TokenType::Identifier(String::from("x")), 1, 17, 1), // x (duplicate)
+            Token::new(TokenType::Colon, 1, 18, 1),                // :
+            Token::new(TokenType::Identifier(String::from("int")), 1, 20, 3), // int
+            Token::new(TokenType::CloseParen, 1, 23, 1),           // )
+            Token::new(TokenType::Arrow, 1, 25, 2),                // ->
+            Token::new(TokenType::Identifier(String::from("void")), 1, 28, 4), // void
+            Token::new(TokenType::OpenCurly, 1, 33, 1),            // {
+            Token::new(TokenType::CloseCurly, 2, 1, 1),            // }
+        ]);
+
+        parser.parse().unwrap();
+    }
+
+    #[test]
+    fn test_function_with_extra_tokens_after_body() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::FnKeyword, 1, 1, 2),             // fn
+            Token::new(TokenType::Identifier(String::from("func")), 1, 4, 4), // func
+            Token::new(TokenType::OpenParen, 1, 8, 1),             // (
+            Token::new(TokenType::CloseParen, 1, 9, 1),            // )
+            Token::new(TokenType::Arrow, 1, 11, 2),                // ->
+            Token::new(TokenType::Identifier(String::from("void")), 1, 14, 4), // void
+            Token::new(TokenType::OpenCurly, 1, 19, 1),            // {
+            Token::new(TokenType::CloseCurly, 2, 1, 1),            // }
+            Token::new(TokenType::Integer(42), 2, 2, 2),           // Extra token
+        ]);
+
+        let result = parser.parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[ignore]
+    fn test_nested_function_body() {
+        let mut parser = Parser::new(vec![
+            Token::new(TokenType::FnKeyword, 1, 1, 2),             // fn
+            Token::new(TokenType::Identifier(String::from("outer")), 1, 4, 5), // outer
+            Token::new(TokenType::OpenParen, 1, 10, 1),            // (
+            Token::new(TokenType::CloseParen, 1, 11, 1),           // )
+            Token::new(TokenType::Arrow, 1, 13, 2),                // ->
+            Token::new(TokenType::Identifier(String::from("void")), 1, 16, 4), // void
+            Token::new(TokenType::OpenCurly, 1, 21, 1),            // {
+            Token::new(TokenType::FnKeyword, 2, 2, 2),             // fn (inner function)
+            Token::new(TokenType::Identifier(String::from("inner")), 2, 5, 5), // inner
+            Token::new(TokenType::OpenParen, 2, 11, 1),            // (
+            Token::new(TokenType::CloseParen, 2, 12, 1),           // )
+            Token::new(TokenType::Arrow, 2, 14, 2),                // ->
+            Token::new(TokenType::Identifier(String::from("int")), 2, 17, 3), // int
+            Token::new(TokenType::OpenCurly, 2, 21, 1),            // {
+            Token::new(TokenType::Integer(1), 3, 3, 1),            // 1
+            Token::new(TokenType::CloseCurly, 4, 2, 1),            // }
+            Token::new(TokenType::CloseCurly, 5, 1, 1),            // }
+        ]);
+
+        let result = parser.parse();
+        assert!(result.is_ok());
+        let node = result.unwrap();
+
+        match node.node_type {
+            ParseNodeType::Program(functions) => {
+                assert_eq!(functions.len(), 1);
+                match &functions[0].node_type {
+                    ParseNodeType::FunctionDeclaration(name, _, body, _) => {
+                        assert_eq!(name, "outer");
+                        match &body.node_type {
+                            ParseNodeType::FunctionDeclaration(inner_name, _, _, _) => {
+                                assert_eq!(inner_name, "inner");
+                            }
+                            _ => panic!("Expected inner function declaration"),
+                        }
+                    }
+                    _ => panic!("Expected FunctionDeclaration node"),
+                }
+            }
+            _ => panic!("Expected Program node"),
+        }
     }
 }
