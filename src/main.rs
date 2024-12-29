@@ -14,7 +14,7 @@ fn main(hello: int) -> int {
 }
 
 fn add(a: int, b: int) -> int {
-    a + b
+    a
 }
 ".to_string());
     lexer.lex().unwrap();

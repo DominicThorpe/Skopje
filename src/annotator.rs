@@ -31,6 +31,7 @@ pub enum Operation {
 pub enum AnnotatedNodeType {
     Program(Vec<AnnotatedNode>),
     Function(String, IndexMap<String, Type>, Type, Box<AnnotatedNode>),
+    FunctionCall(String, Vec<AnnotatedNode>),
     Loop(String, Type, Box<AnnotatedNode>, Box<AnnotatedNode>),
     IfElse(Box<AnnotatedNode>, Box<AnnotatedNode>, Box<AnnotatedNode>),
     Variable(String, Type, Box<AnnotatedNode>, Box<AnnotatedNode>),
@@ -146,7 +147,21 @@ impl Annotator {
 
             // Handle identifiers by finding their corresponding symbols in the symbol table
             ParseNodeType::Identifier(id) => self.get_annotated_id(id.as_str(), &symbol_table),
-            _ => Ok(AnnotatedNode::new(symbol_table, AnnotatedNodeType::Unit, (0, 0)))
+            
+            ParseNodeType::FunctionCall(name, args) => {
+                let annotated_node_type = AnnotatedNodeType::FunctionCall(
+                    name,
+                    args.into_iter().map(|arg| self.annotate(arg, symbol_table.clone()).unwrap()).collect()
+                );
+                
+                Ok(AnnotatedNode::new(
+                    symbol_table.clone(),
+                    annotated_node_type,
+                    (parse_tree.position.line, parse_tree.position.col)
+                ))
+            },
+            
+            other => unimplemented!("{:?} is not yet supported", other),
         }
     }
 
