@@ -10,7 +10,7 @@ mod annotator;
 fn main() {
     let mut lexer = lexing::Lexer::new("
 fn main(hello: int) -> int {
-    hello
+    add
 }
 
 fn add(a: int, b: int) -> int {
@@ -23,7 +23,7 @@ fn add(a: int, b: int) -> int {
     let parse_tree = parser.parse().unwrap();
     let annotated_tree = Annotator::new().annotate(parse_tree.clone(), SymbolTable::new()).unwrap();
     
-    println!("{:#?}", parse_tree);
+    println!("{:#?}", annotated_tree);
 }
 
 

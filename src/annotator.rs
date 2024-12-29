@@ -1,13 +1,15 @@
+use std::collections::HashMap;
 use std::error::Error;
 use indexmap::IndexMap;
 use crate::errors::{ParsingError, SemanticError};
 use crate::parsing::{ParseNode, ParseNodeType};
-use crate::symbol_table::{SymbolTable, Type};
+use crate::symbol_table::{SymbolTable, SymbolTableEntry, Type};
 
 
 /// Represents operations that can be performed in binary or unary expressions.
 ///
 /// This enum is used to describe mathematical or logical operations in the annotated syntax tree.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Operation {
     Add,
@@ -24,6 +26,7 @@ pub enum Operation {
 ///
 /// This enum encompasses all possible kinds of nodes that may appear in an annotated program. 
 /// Each variant represents a specific type of syntax or construct in the program.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnnotatedNodeType {
     Program(Vec<AnnotatedNode>),
@@ -114,11 +117,12 @@ impl Annotator {
     /// let annotated_node = result.unwrap();
     /// assert!(matches!(annotated_node.node_type, AnnotatedNodeType::Int(42)));
     /// ```
-    pub fn annotate(&self, parse_tree: ParseNode, symbol_table: SymbolTable) -> Result<AnnotatedNode, Box<dyn Error>> {
+    pub fn annotate(&self, parse_tree: ParseNode, mut symbol_table: SymbolTable) -> Result<AnnotatedNode, Box<dyn Error>> {
         // Match against the type of the current parse node
         match parse_tree.node_type {
             // If the node represents a program, process all functions within it and collect them
             ParseNodeType::Program(functions) => {
+                symbol_table.add_symbols(self.get_function_types(&functions, symbol_table.clone())?);
                 let node_type = AnnotatedNodeType::Program(
                     functions.into_iter().map(|f| self.annotate(f, symbol_table.clone()).unwrap()).collect());
                 
@@ -144,6 +148,75 @@ impl Annotator {
             ParseNodeType::Identifier(id) => self.get_annotated_id(id.as_str(), &symbol_table),
             _ => Ok(AnnotatedNode::new(symbol_table, AnnotatedNodeType::Unit, (0, 0)))
         }
+    }
+
+
+    /// Extracts and constructs function types along with their symbol table entries from the parse nodes.
+    ///
+    /// This function processes a list of function declarations, extracting parameter types and return types to
+    /// construct a mapping of function names to their corresponding `SymbolTableEntry`. The `SymbolTableEntry`
+    /// includes the function's type and its position in the source code.
+    ///
+    /// # Parameters
+    /// - `funcs`: A vector of `ParseNode` representing function declarations.
+    /// - `symbol_table`: The current symbol table for type resolution.
+    ///
+    /// # Returns
+    /// - `Ok(HashMap<String, SymbolTableEntry>)` on success.
+    /// - `Err(Box<dyn Error>)` if type annotation or parsing fails.
+    ///
+    /// # Errors
+    /// - Returns an error if an unexpected parse node type is encountered or type resolution fails.
+    fn get_function_types(&self, funcs: &[ParseNode], symbol_table: SymbolTable) -> Result<HashMap<String, SymbolTableEntry>, Box<dyn Error>> {
+        // Initialize a HashMap to store function name and their symbol table entry.
+        let mut func_types: HashMap<String, SymbolTableEntry> = HashMap::with_capacity(funcs.len());
+
+        for func in funcs {
+            // Extract the position of the function for error reporting.
+            let (line, col) = (func.position.line, func.position.col);
+
+            // Ensure the node is a function declaration to proceed.
+            match &func.node_type {
+                ParseNodeType::FunctionDeclaration(name, params, _, return_type_node) => {
+                    // Extract parameter types and handle potential errors upfront.
+                    let param_types = params
+                        .iter()
+                        .map(|param| match &param.node_type {
+                            ParseNodeType::FunctionParameter(_, param_type) =>
+                                self.get_annotated_type(*param_type.clone(), symbol_table.clone()),
+                            _ => panic!(),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    // Resolve the return type.
+                    let return_type = self.get_annotated_type(
+                        *return_type_node.clone(), 
+                        symbol_table.clone()
+                    )?;
+
+                    // Create a function type and store it in the HashMap.
+                    let func_type = Type::Function(param_types, Box::new(return_type));
+                    func_types.insert(
+                        name.clone(),
+                        SymbolTableEntry {
+                            symbol_type: func_type,
+                            symbol_position: (line, col),
+                        },
+                    );
+                }
+                // If the node isn't a valid function declaration, return a detailed error.
+                node => {
+                    return Err(Box::new(ParsingError::UnexpectedParseNode(
+                        node.clone(),
+                        func.position.line,
+                        func.position.col,
+                    )));
+                }
+            }
+        }
+
+        // Return the constructed function type mappings.
+        Ok(func_types)
     }
     
     
@@ -198,11 +271,237 @@ impl Annotator {
     fn get_annotated_id(&self, id: &str, symbol_table: &SymbolTable) -> Result<AnnotatedNode, Box<dyn Error>> {
         match symbol_table.get_symbol(id) {
             None => Err(Box::new(SemanticError::UnknownSymbol(id.to_string(), 0, 0))),
-            Some(s) => Ok(AnnotatedNode::new(
+            Some(_) => Ok(AnnotatedNode::new(
                 symbol_table.clone(),
                 AnnotatedNodeType::Identifier(id.to_string()),
                 (0, 0)
             ))
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parsing::{ParseNodeType, ParseNode};
+    use crate::symbol_table::{SymbolTable, Type};
+    use crate::lexing::Position;
+
+    #[test]
+    fn test_get_function_types_success() {
+        let annotator = Annotator::new();
+        // Construct a function declaration ParseNode to test against
+        let func_node = ParseNode {
+            node_type: ParseNodeType::FunctionDeclaration(
+                "test_function".to_string(),
+                vec![
+                    ParseNode {
+                        node_type: ParseNodeType::FunctionParameter(
+                            "x".to_string(),
+                            Box::new(ParseNode {
+                                node_type: ParseNodeType::Identifier("int".to_string()),
+                                position: Position::zeros(),
+                            }),
+                        ),
+                        position: Position::zeros(),
+                    },
+                ],
+                Box::new(ParseNode {
+                    node_type: ParseNodeType::IntegerLiteral(42),
+                    position: Position::zeros(),
+                }),
+                Box::new(ParseNode {
+                    node_type: ParseNodeType::Identifier("int".to_string()),
+                    position: Position::zeros(),
+                }),
+            ),
+            position: Position::zeros(),
+        };
+
+        let symbol_table = SymbolTable::new();
+
+        // Call get_function_types
+        let result = annotator.get_function_types(&[func_node], symbol_table);
+
+        // Assert the result is Ok and check the contents
+        assert!(result.is_ok());
+        let func_types = result.unwrap();
+        assert!(func_types.contains_key("test_function"));
+        let entry = func_types["test_function"].clone();
+        if let Type::Function(param_types, return_type) = entry.symbol_type {
+            assert_eq!(param_types.len(), 1);
+            assert_eq!(param_types[0], Type::SignedInt);
+            assert_eq!(*return_type, Type::SignedInt);
+        } else {
+            panic!("Expected function type, got: {:?}", entry.symbol_type);
+        }
+    }
+
+    #[test]
+    fn test_get_function_types_unexpected_node() {
+        let annotator = Annotator::new();
+        let invalid_node = ParseNode {
+            node_type: ParseNodeType::IntegerLiteral(42),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call get_function_types and assert it returns an error
+        let result = annotator.get_function_types(&[invalid_node], symbol_table);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_annotate_program() {
+        let annotator = Annotator::new();
+        let program_node = ParseNode {
+            node_type: ParseNodeType::Program(vec![
+                ParseNode {
+                    node_type: ParseNodeType::FunctionDeclaration(
+                        "main".to_string(),
+                        vec![],
+                        Box::new(ParseNode {
+                            node_type: ParseNodeType::IntegerLiteral(1),
+                            position: Position::zeros(),
+                        }),
+                        Box::new(ParseNode {
+                            node_type: ParseNodeType::Identifier("int".to_string()),
+                            position: Position::zeros(),
+                        }),
+                    ),
+                    position: Position::zeros(),
+                },
+            ]),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call annotate
+        let result = annotator.annotate(program_node, symbol_table);
+
+        // Assert the program was annotated correctly
+        assert!(result.is_ok());
+        let annotated_program = result.unwrap();
+        assert!(matches!(
+            annotated_program.node_type,
+            AnnotatedNodeType::Program(_)
+        ));
+    }
+
+    #[test]
+    fn test_annotate_integer_literal() {
+        let annotator = Annotator::new();
+        let integer_node = ParseNode {
+            node_type: ParseNodeType::IntegerLiteral(100),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call annotate
+        let result = annotator.annotate(integer_node, symbol_table);
+
+        // Assert the integer literal was annotated correctly
+        assert!(result.is_ok());
+        let annotated_node = result.unwrap();
+        assert!(matches!(
+            annotated_node.node_type,
+            AnnotatedNodeType::Int(value) if value == 100
+        ));
+    }
+
+    #[test]
+    fn test_annotate_function() {
+        let annotator = Annotator::new();
+        let func_node = ParseNode {
+            node_type: ParseNodeType::FunctionDeclaration(
+                "test".to_string(),
+                vec![
+                    ParseNode {
+                        node_type: ParseNodeType::FunctionParameter(
+                            "x".to_string(),
+                            Box::new(ParseNode {
+                                node_type: ParseNodeType::Identifier("int".to_string()),
+                                position: Position::zeros(),
+                            }),
+                        ),
+                        position: Position::zeros(),
+                    },
+                ],
+                Box::new(ParseNode {
+                    node_type: ParseNodeType::IntegerLiteral(1),
+                    position: Position::zeros(),
+                }),
+                Box::new(ParseNode {
+                    node_type: ParseNodeType::Identifier("int".to_string()),
+                    position: Position::zeros(),
+                }),
+            ),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call annotate
+        let result = annotator.annotate(func_node, symbol_table);
+
+        // Assert the function was annotated correctly
+        assert!(result.is_ok());
+        let annotated_function = result.unwrap();
+        assert!(matches!(
+            annotated_function.node_type,
+            AnnotatedNodeType::Function(_, _, _, _)
+        ));
+    }
+
+    #[test]
+    fn test_annotate_unhandled_node() {
+        let annotator = Annotator::new();
+        let unknown_node = ParseNode {
+            node_type: ParseNodeType::ArrayType(Box::new(ParseNode {
+                node_type: ParseNodeType::Identifier("unknown".to_string()),
+                position: Position::zeros(),
+            })),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call annotate
+        let result = annotator.annotate(unknown_node, symbol_table);
+
+        // Assert the node is annotated as Unit
+        assert!(result.is_ok());
+        let annotated_node = result.unwrap();
+        assert!(matches!(annotated_node.node_type, AnnotatedNodeType::Unit));
+    }
+
+    #[test]
+    fn test_get_annotated_type_success() {
+        let annotator = Annotator::new();
+        let type_node = ParseNode {
+            node_type: ParseNodeType::Identifier("int".to_string()),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call get_annotated_type
+        let result = annotator.get_annotated_type(type_node, symbol_table);
+
+        // Assert type is correctly resolved
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Type::SignedInt);
+    }
+
+    #[test]
+    fn test_get_annotated_type_error() {
+        let annotator = Annotator::new();
+        let invalid_node = ParseNode {
+            node_type: ParseNodeType::Identifier("unknown_type".to_string()),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call get_annotated_type and expect an error
+        let result = annotator.get_annotated_type(invalid_node, symbol_table);
+        assert!(result.is_err());
     }
 }

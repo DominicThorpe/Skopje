@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq)]
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub enum Type {
     /// The types of the parameters of the function, and the return type of the function
     Function(Vec<Type>, Box<Type>),
@@ -26,36 +28,43 @@ impl Type {
 }
 
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct SymbolTableEntry {
-    name: String,
-    symbol_type: Type,
-    symbol_position: (usize, usize),
+    pub symbol_type: Type,
+    pub symbol_position: (usize, usize),
 }
 
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SymbolTable {
-    symbols: Vec<SymbolTableEntry>,
+    symbols: HashMap<String, SymbolTableEntry>,
 }
 
 impl SymbolTable {
     pub fn new() -> Self {
-        Self { symbols: Vec::new() }
+        Self { symbols: HashMap::new() }
     }
 
 
     pub fn add_symbol(&mut self, name: String, symbol_type: Type, symbol_position: (usize, usize)) {
-        self.symbols.push(SymbolTableEntry { name, symbol_type, symbol_position });
+        self.symbols.insert(name, SymbolTableEntry { symbol_type, symbol_position });
+    }
+    
+    
+    pub fn add_symbols(&mut self, new_symbols: HashMap<String, SymbolTableEntry>) {
+        self.symbols.extend(new_symbols);
     }
 
 
     pub fn get_symbol(&self, name: &str) -> Option<&SymbolTableEntry> {
-        self.symbols.iter().find(|s| s.name == name)
+        self.symbols.get(name)
     }
 
 
     pub fn get_symbol_type(&self, name: &str) -> Option<&Type> {
-        self.get_symbol(name).map(|s| &s.symbol_type)
+        match self.get_symbol(name) {
+            Some(SymbolTableEntry { symbol_type, symbol_position }) => Some(symbol_type),
+            None => None
+        }
     }
 }
