@@ -119,12 +119,18 @@ impl Lexer {
             if !current_str.is_empty() {
                 return Err(LexingError::UnterminatedString(self.line, self.col))
             }
-
-            self.col = 1;
-            self.line += 1;
+            
+            // move to the next line and reset the cols if there is another line to process,
+            // otherwise add the end token and stop lexing
+            if (self.line < self.input.len()) {
+                self.col = 1;
+                self.line += 1;
+            } else {
+                self.tokens.push(Token::new(TokenType::End, self.line, self.col, 0));
+                break;
+            }
         }
 
-        self.tokens.push(Token::new(TokenType::End, self.line - 1, self.col, 0));
         Ok(())
     }
 

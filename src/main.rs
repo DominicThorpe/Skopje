@@ -10,7 +10,7 @@ mod annotator;
 fn main() {
     let mut lexer = lexing::Lexer::new("
 fn main(hello: int) -> int {
-    add
+    add(1, 2)
 }
 
 fn add(a: int, b: int) -> int {
