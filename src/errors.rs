@@ -51,6 +51,7 @@ impl fmt::Display for ParsingError {
 pub enum SemanticError {
     InvalidType(String, usize, usize),
     UnknownSymbol(String, usize, usize),
+    UnknownOperation(String, usize, usize),
 }
 
 impl Error for SemanticError {}
@@ -62,6 +63,8 @@ impl fmt::Display for SemanticError {
                 write!(f, "Invalid type '{}' on line {} at column {}", type_name, line, col),
             Self::UnknownSymbol(symbol_name, line, col) => 
                 write!(f, "Unknown symbol '{}' on line {} at column {}", symbol_name, line, col),
+            Self::UnknownOperation(op_name, line, col) => 
+                write!(f, "Unknown operation '{}' on line {} at column {}", op_name, line, col),
         }
     }
 }

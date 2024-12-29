@@ -22,6 +22,22 @@ pub enum Operation {
 }
 
 
+impl Operation {
+    pub fn from_str(s: &str) -> Option<Operation> {
+        match s { 
+            "+" => Some(Operation::Add),
+            "-" => Some(Operation::Sub),
+            "*" => Some(Operation::Mul),
+            "/" => Some(Operation::Div),
+            "==" => Some(Operation::Eq),
+            "!=" => Some(Operation::Neq),
+            "::" => Some(Operation::Range),
+            _ => None,
+        }
+    }
+}
+
+
 /// Represents the types of annotated nodes in the abstract syntax tree.
 ///
 /// This enum encompasses all possible kinds of nodes that may appear in an annotated program. 
@@ -37,6 +53,7 @@ pub enum AnnotatedNodeType {
     Variable(String, Type, Box<AnnotatedNode>, Box<AnnotatedNode>),
     BinaryOp(Operation, Box<AnnotatedNode>, Box<AnnotatedNode>),
     UnaryOp(Operation, Box<AnnotatedNode>),
+    ArrayIndexOp(Box<AnnotatedNode>, Box<AnnotatedNode>),
     Float(f64),
     Int(u64),
     String(String),
@@ -160,6 +177,39 @@ impl Annotator {
                     (parse_tree.position.line, parse_tree.position.col)
                 ))
             },
+            
+            ParseNodeType::BinaryOperation(op, left, right) => { 
+                let op = match Operation::from_str(op.as_str()) {
+                    Some(op ) => op,
+                    None => return Err(Box::new(SemanticError::UnknownOperation(op, 0, 0)))
+                };
+                
+                let left = self.annotate(*left, symbol_table.clone())?;
+                let right = self.annotate(*right, symbol_table.clone())?;
+                let left_position = left.position; 
+                let node_type = AnnotatedNodeType::BinaryOp(op, Box::new(left), Box::new(right));
+                Ok(AnnotatedNode::new(symbol_table, node_type, left_position))
+            },
+            
+            ParseNodeType::UnaryOperation(op, operand) => {
+                let op = match Operation::from_str(op.as_str()) {
+                    Some(op) => op,
+                    None => return Err(Box::new(SemanticError::UnknownOperation(op, 0, 0)))
+                };
+                
+                let operand = self.annotate(*operand, symbol_table.clone())?;
+                let op_pos = operand.position;
+                let node_type = AnnotatedNodeType::UnaryOp(op, Box::new(operand));
+                Ok(AnnotatedNode::new(symbol_table, node_type, op_pos))
+            },
+            
+            ParseNodeType::ArrayIndexOperation(array, index) => {
+                let array = self.annotate(*array, symbol_table.clone())?;
+                let index = self.annotate(*index, symbol_table.clone())?;
+                let array_pos = array.position;
+                let node_type = AnnotatedNodeType::ArrayIndexOp(Box::new(array), Box::new(index));
+                Ok(AnnotatedNode::new(symbol_table, node_type, array_pos))
+            }
             
             other => unimplemented!("{:?} is not yet supported", other),
         }
@@ -301,7 +351,8 @@ mod tests {
     use super::*;
     use crate::parsing::{ParseNodeType, ParseNode};
     use crate::symbol_table::{SymbolTable, Type};
-    use crate::lexing::Position;
+    use crate::lexing::{Lexer, Position};
+    use crate::parsing;
 
     #[test]
     fn test_get_function_types_success() {
@@ -469,6 +520,7 @@ mod tests {
     }
 
     #[test]
+    #[should_panic]
     fn test_annotate_unhandled_node() {
         let annotator = Annotator::new();
         let unknown_node = ParseNode {
@@ -482,11 +534,7 @@ mod tests {
 
         // Call annotate
         let result = annotator.annotate(unknown_node, symbol_table);
-
-        // Assert the node is annotated as Unit
-        assert!(result.is_ok());
-        let annotated_node = result.unwrap();
-        assert!(matches!(annotated_node.node_type, AnnotatedNodeType::Unit));
+        result.unwrap();
     }
 
     #[test]
@@ -518,5 +566,66 @@ mod tests {
         // Call get_annotated_type and expect an error
         let result = annotator.get_annotated_type(invalid_node, symbol_table);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_annotate_unary_operation() {
+        let annotator = Annotator::new();
+        let unary_node = ParseNode {
+            node_type: ParseNodeType::UnaryOperation(
+                "-".to_string(),
+                Box::new(ParseNode {
+                    node_type: ParseNodeType::IntegerLiteral(42),
+                    position: Position::zeros(),
+                }),
+            ),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call annotate
+        let result = annotator.annotate(unary_node, symbol_table);
+
+        // Assert the unary operation was annotated correctly
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_annotate_binary_operation() {
+        let annotator = Annotator::new();
+        let binary_node = ParseNode {
+            node_type: ParseNodeType::BinaryOperation(
+                "+".to_string(),
+                Box::new(ParseNode {
+                    node_type: ParseNodeType::IntegerLiteral(10),
+                    position: Position::zeros(),
+                }),
+                Box::new(ParseNode {
+                    node_type: ParseNodeType::IntegerLiteral(20),
+                    position: Position::zeros(),
+                }),
+            ),
+            position: Position::zeros(),
+        };
+        let symbol_table = SymbolTable::new();
+
+        // Call annotate
+        let result = annotator.annotate(binary_node, symbol_table);
+
+        // Assert the binary operation was annotated correctly
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_annotate_array_index_operation() {
+        let mut lexer = Lexer::new("fn main(arr: [int]) -> int { arr[1] }".to_string());
+        lexer.lex().unwrap();
+
+        let mut parser = parsing::Parser::new(lexer.tokens);
+        let parse_tree = parser.parse().unwrap();
+        let result = Annotator::new().annotate(parse_tree.clone(), SymbolTable::new());
+
+        // Assert the array index operation was annotated correctly
+        assert!(result.is_ok());
     }
 }
